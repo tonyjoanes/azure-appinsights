@@ -50,10 +50,6 @@
         "net8.0": {
           "targetAlias": "net8.0",
           "dependencies": {
-            "Azure.Storage.Queues": {
-              "target": "Package",
-              "version": "[12.19.1, )"
-            },
             "OpenTelemetry.Exporter.OpenTelemetryProtocol": {
               "target": "Package",
               "version": "[1.7.0, )"
@@ -69,6 +65,10 @@
             "OpenTelemetry.Instrumentation.Http": {
               "target": "Package",
               "version": "[1.7.1, )"
+            },
+            "RabbitMQ.Client": {
+              "target": "Package",
+              "version": "[6.8.1, )"
             }
           },
           "imports": [

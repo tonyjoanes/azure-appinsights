@@ -1,22 +1,23 @@
 services:
-  # Azurite - Local Azure Storage emulator (start first)
-  azurite:
-    image: mcr.microsoft.com/azure-storage/azurite:latest
-    command: ["azurite", "--loose", "--location", "/data", "--debug", "/data/debug.log"]
+  # RabbitMQ - Message broker
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
     ports:
-      - "10000:10000"  # Blob service
-      - "10001:10001"  # Queue service
-      - "10002:10002"  # Table service
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
     volumes:
-      - azurite-data:/data
+      - rabbitmq-data:/var/lib/rabbitmq
     networks:
       - otel-network
     healthcheck:
-      test: ["CMD-SHELL", "echo 'Azurite is ready' || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   # Jaeger UI for viewing traces locally
   jaeger:
@@ -55,11 +56,14 @@ services:
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://+:5000
-      - AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USERNAME=guest
+      - RABBITMQ_PASSWORD=guest
       - QUEUE_NAME=${QUEUE_NAME:-otel-demo-queue}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
     depends_on:
-      azurite:
+      rabbitmq:
         condition: service_healthy
       otel-collector:
         condition: service_started
@@ -72,14 +76,15 @@ services:
       context: ./backend/consumer
       dockerfile: Dockerfile
     environment:
-      - AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USERNAME=guest
+      - RABBITMQ_PASSWORD=guest
       - QUEUE_NAME=${QUEUE_NAME:-otel-demo-queue}
-      - USE_IN_MEMORY_QUEUE=${USE_IN_MEMORY_QUEUE:-true}
-      - PRODUCER_API_URL=http://producer-api:5000
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
     depends_on:
-      producer-api:
-        condition: service_started
+      rabbitmq:
+        condition: service_healthy
       otel-collector:
         condition: service_started
     networks:
@@ -105,7 +110,7 @@ services:
       - otel-network
 
 volumes:
-  azurite-data:
+  rabbitmq-data:
 
 networks:
   otel-network:

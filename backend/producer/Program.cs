@@ -1,10 +1,6 @@
-using System.Diagnostics;
-using Azure.Storage;
-using Azure.Storage.Queues;
-using Azure.Storage.Queues.Models;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
-using Producer.Services;
+using RabbitMQ.Client;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -25,109 +21,51 @@ builder.Services.AddCors(options =>
     );
 });
 
-// Configuration helpers
-var isDocker =
-    Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")?.Contains("otel-collector")
-    == true;
-var defaultConnectionString =
-    "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCzY4EwN/jaiwduXtrKWLoYIC3A7jqJA==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;";
+// RabbitMQ Configuration
+var rabbitmqHost = Environment.GetEnvironmentVariable("RABBITMQ_HOST") ?? "localhost";
+var rabbitmqPort = int.Parse(Environment.GetEnvironmentVariable("RABBITMQ_PORT") ?? "5672");
+var rabbitmqUsername = Environment.GetEnvironmentVariable("RABBITMQ_USERNAME") ?? "guest";
+var rabbitmqPassword = Environment.GetEnvironmentVariable("RABBITMQ_PASSWORD") ?? "guest";
+var queueName = Environment.GetEnvironmentVariable("QUEUE_NAME") ?? "otel-demo-queue";
 
-var connectionString =
-    builder.Configuration.GetConnectionString("AzureStorage")
-    ?? Environment.GetEnvironmentVariable("AZURE_STORAGE_CONNECTION_STRING")
-    ?? defaultConnectionString;
-
-// Ensure connection string is never null or empty
-if (string.IsNullOrWhiteSpace(connectionString))
+// Register RabbitMQ Connection Factory
+builder.Services.AddSingleton<IConnectionFactory>(sp =>
 {
-    connectionString = defaultConnectionString;
-}
-
-// Normalize connection string for Docker
-if (isDocker && !string.IsNullOrWhiteSpace(connectionString))
-{
-    connectionString = connectionString
-        .Replace("127.0.0.1", "azurite")
-        .Replace("localhost", "azurite");
-}
-
-var queueName =
-    builder.Configuration["QueueName"]
-    ?? Environment.GetEnvironmentVariable("QUEUE_NAME")
-    ?? "otel-demo-queue";
-
-// Capture in local variables for closure
-var finalConnectionString = connectionString ?? defaultConnectionString;
-var finalQueueName = queueName;
-
-// Logging helper
-if (builder.Environment.IsDevelopment())
-{
-    var masked = finalConnectionString;
-    if (masked.Contains("AccountKey="))
+    return new ConnectionFactory
     {
-        var keyStart = masked.IndexOf("AccountKey=") + 11;
-        var keyEnd = masked.IndexOf(';', keyStart);
-        if (keyEnd == -1)
-            keyEnd = masked.Length;
-        masked = masked.Substring(0, keyStart) + "***MASKED***" + masked.Substring(keyEnd);
-    }
-    Console.WriteLine($"[DEBUG] Environment: Docker={isDocker}, Queue={finalQueueName}");
-    Console.WriteLine($"[DEBUG] Connection: {masked}");
-    Console.WriteLine($"[DEBUG] Connection string length: {finalConnectionString?.Length ?? 0}");
-}
+        HostName = rabbitmqHost,
+        Port = rabbitmqPort,
+        UserName = rabbitmqUsername,
+        Password = rabbitmqPassword,
+        DispatchConsumersAsync = true,
+    };
+});
 
-// Use in-memory queue for development (Azurite connectivity issues in Docker)
-// For production, use a real Azure Storage account
-var useInMemoryQueue = Environment.GetEnvironmentVariable("USE_IN_MEMORY_QUEUE") != "false";
-
-if (useInMemoryQueue)
+// Register RabbitMQ Connection
+builder.Services.AddSingleton<IConnection>(sp =>
 {
-    Console.WriteLine($"[INFO] Using in-memory queue for development");
-    builder.Services.AddSingleton<InMemoryQueueService>();
-}
-else
+    var factory = sp.GetRequiredService<IConnectionFactory>();
+    return factory.CreateConnection();
+});
+
+// Register RabbitMQ Channel
+builder.Services.AddSingleton<IModel>(sp =>
 {
-    // QueueClient factory - only used if not using in-memory queue
-    builder.Services.AddSingleton(sp =>
-    {
-        Console.WriteLine($"[DEBUG] Creating QueueClient at {DateTime.UtcNow:O}");
+    var connection = sp.GetRequiredService<IConnection>();
+    var channel = connection.CreateModel();
 
-        QueueClient client;
+    // Declare queue
+    channel.QueueDeclare(
+        queue: queueName,
+        durable: false,
+        exclusive: false,
+        autoDelete: false,
+        arguments: null
+    );
 
-        if (isDocker)
-        {
-            var accountName = "devstoreaccount1";
-            var accountKey =
-                "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCzY4EwN/jaiwduXtrKWLoYIC3A7jqJA==";
-            var queueUri = new Uri($"http://azurite:10001/{accountName}/{finalQueueName}");
-
-            var options = new QueueClientOptions { MessageEncoding = QueueMessageEncoding.Base64 };
-
-            client = new QueueClient(
-                queueUri,
-                new StorageSharedKeyCredential(accountName, accountKey),
-                options
-            );
-            Console.WriteLine($"[DEBUG] Using StorageSharedKeyCredential with URI: {queueUri}");
-        }
-        else
-        {
-            if (string.IsNullOrWhiteSpace(finalConnectionString))
-            {
-                throw new InvalidOperationException(
-                    "Connection string is null or empty when creating QueueClient"
-                );
-            }
-
-            var options = new QueueClientOptions { MessageEncoding = QueueMessageEncoding.Base64 };
-            client = new QueueClient(finalConnectionString, finalQueueName, options);
-            Console.WriteLine($"[DEBUG] Using connection string");
-        }
-
-        return client;
-    });
-}
+    Console.WriteLine($"[INFO] RabbitMQ queue '{queueName}' declared");
+    return channel;
+});
 
 // OpenTelemetry
 builder
@@ -153,7 +91,6 @@ var app = builder.Build();
 
 app.UseCors("AllowFrontend");
 app.UseHttpsRedirection();
-app.UseAuthorization();
 app.MapControllers();
 
 app.Run();

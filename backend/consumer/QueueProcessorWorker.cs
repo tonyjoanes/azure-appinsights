@@ -1,164 +1,79 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
-using Azure.Storage.Queues;
+using OpenTelemetry;
+using OpenTelemetry.Context.Propagation;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 
 namespace Consumer;
 
 public class QueueProcessorWorker : BackgroundService
 {
-    private readonly QueueClient? _queueClient;
-    private readonly IHttpClientFactory? _httpClientFactory;
+    private readonly IModel _channel;
+    private readonly string _queueName;
     private readonly ILogger<QueueProcessorWorker> _logger;
     private static readonly ActivitySource ActivitySource = new("consumer-service");
-    private readonly bool _useInMemoryQueue;
+    private static readonly TextMapPropagator Propagator = Propagators.DefaultTextMapPropagator;
 
     public QueueProcessorWorker(
-        ILogger<QueueProcessorWorker> logger,
-        QueueClient? queueClient = null,
-        IHttpClientFactory? httpClientFactory = null)
+        IModel channel,
+        ILogger<QueueProcessorWorker> logger)
     {
-        _queueClient = queueClient;
-        _httpClientFactory = httpClientFactory;
+        _channel = channel;
+        _queueName =
+            Environment.GetEnvironmentVariable("QUEUE_NAME")
+            ?? "otel-demo-queue";
         _logger = logger;
-        _useInMemoryQueue = httpClientFactory != null;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("Consumer service started. Polling queue for messages...");
+        _logger.LogInformation("Consumer service started. Waiting for messages from RabbitMQ...");
 
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try
-            {
-                if (_useInMemoryQueue && _httpClientFactory != null)
-                {
-                    // Poll producer API for messages
-                    await PollHttpQueueAsync(stoppingToken);
-                }
-                else if (_queueClient != null)
-                {
-                    // Poll Azure Storage Queue
-                    await PollAzureQueueAsync(stoppingToken);
-                }
-                else
-                {
-                    _logger.LogError("No queue service available");
-                    await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error polling queue");
-                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
-            }
-        }
-    }
+        var consumer = new AsyncEventingBasicConsumer(_channel);
 
-    private async Task PollHttpQueueAsync(CancellationToken stoppingToken)
-    {
-        try
+        consumer.Received += async (model, ea) =>
         {
-            using var httpClient = _httpClientFactory!.CreateClient("ProducerApi");
-            var response = await httpClient.GetAsync("/api/messages/receive", stoppingToken);
-            
-            if (response.StatusCode == System.Net.HttpStatusCode.OK)
-            {
-                var content = await response.Content.ReadAsStringAsync(stoppingToken);
-                var result = JsonSerializer.Deserialize<JsonElement>(content);
-                
-                if (result.TryGetProperty("messageText", out var messageTextElement))
+            var body = ea.Body.ToArray();
+            var messageText = Encoding.UTF8.GetString(body);
+            var properties = ea.BasicProperties;
+
+            // Extract trace context from RabbitMQ headers using OpenTelemetry propagator
+            var parentContext = Propagator.Extract(
+                default,
+                properties.Headers ?? new Dictionary<string, object>(),
+                (headers, key) =>
                 {
-                    var base64Message = messageTextElement.GetString();
-                    if (!string.IsNullOrEmpty(base64Message))
+                    if (headers.TryGetValue(key, out var value))
                     {
-                        using var activity = ActivitySource.StartActivity("ProcessMessage");
-                        
-                        try
-                        {
-                            // Decode the message
-                            var base64Bytes = Convert.FromBase64String(base64Message);
-                            var jsonMessage = Encoding.UTF8.GetString(base64Bytes);
-                            var messageData = JsonSerializer.Deserialize<MessageData>(jsonMessage);
-
-                            if (messageData != null)
-                            {
-                                activity?.SetTag("message.original.id", messageData.MessageId);
-                                activity?.SetTag("message.text", messageData.Message);
-                                activity?.SetTag("message.timestamp", messageData.Timestamp.ToString());
-
-                                // Link to parent trace if available
-                                if (!string.IsNullOrEmpty(messageData.TraceId) && !string.IsNullOrEmpty(messageData.SpanId))
-                                {
-                                    activity?.SetTag("parent.trace_id", messageData.TraceId);
-                                    activity?.SetTag("parent.span_id", messageData.SpanId);
-                                    // Note: For proper trace linking, you'd use ActivityLinks, but for simplicity
-                                    // we're just tagging the parent trace/span IDs
-                                }
-
-                                _logger.LogInformation(
-                                    "Processing message: {MessageId}, Content: {Message}",
-                                    messageData.MessageId,
-                                    messageData.Message
-                                );
-
-                                // Simulate some work
-                                await Task.Delay(100, stoppingToken);
-
-                                activity?.SetStatus(ActivityStatusCode.Ok);
-                                _logger.LogInformation(
-                                    "Successfully processed message: {MessageId}",
-                                    messageData.MessageId
-                                );
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-                            activity?.SetTag("error.type", ex.GetType().Name);
-                            activity?.SetTag("error.message", ex.Message);
-                            _logger.LogError(ex, "Error processing message");
-                        }
+                        var stringValue = value is byte[] bytes ? Encoding.UTF8.GetString(bytes) : value?.ToString();
+                        return string.IsNullOrEmpty(stringValue) ? Array.Empty<string>() : new[] { stringValue };
                     }
-                }
-            }
-            else if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
-            {
-                // No messages available, wait before polling again
-                await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error polling HTTP queue");
-            await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
-        }
-    }
+                    return Array.Empty<string>();
+                });
 
-    private async Task PollAzureQueueAsync(CancellationToken stoppingToken)
-    {
-        var messages = await _queueClient!.ReceiveMessagesAsync(
-            maxMessages: 1,
-            cancellationToken: stoppingToken
-        );
-
-        foreach (var message in messages.Value)
-        {
-            using var activity = ActivitySource.StartActivity("ProcessMessage");
-            activity?.SetTag("message.id", message.MessageId);
-            activity?.SetTag("message.dequeue.count", message.DequeueCount);
+            // Start messaging span following OpenTelemetry semantic conventions
+            // Span name: {destination} receive
+            var activityName = $"{_queueName} receive";
+            using var activity = ActivitySource.StartActivity(
+                activityName,
+                ActivityKind.Consumer,
+                parentContext.ActivityContext);
 
             try
             {
-                // Decode the message
-                var base64Bytes = Convert.FromBase64String(message.MessageText);
-                var jsonMessage = Encoding.UTF8.GetString(base64Bytes);
-                var messageData = JsonSerializer.Deserialize<MessageData>(jsonMessage);
+                var messageData = JsonSerializer.Deserialize<MessageData>(messageText);
 
                 if (messageData != null)
                 {
-                    activity?.SetTag("message.original.id", messageData.MessageId);
+                    // Set messaging semantic convention attributes
+                    activity?.SetTag("messaging.system", "rabbitmq");
+                    activity?.SetTag("messaging.destination", _queueName);
+                    activity?.SetTag("messaging.destination_kind", "queue");
+                    activity?.SetTag("messaging.operation", "receive");
+                    activity?.SetTag("messaging.message_id", messageData.MessageId);
+                    activity?.SetTag("message.id", messageData.MessageId);
                     activity?.SetTag("message.text", messageData.Message);
                     activity?.SetTag("message.timestamp", messageData.Timestamp.ToString());
 
@@ -168,37 +83,51 @@ public class QueueProcessorWorker : BackgroundService
                         messageData.Message
                     );
 
+                    // Simulate some work
                     await Task.Delay(100, stoppingToken);
 
-                    await _queueClient.DeleteMessageAsync(
-                        message.MessageId,
-                        message.PopReceipt,
-                        stoppingToken
-                    );
+                    // Acknowledge message
+                    _channel.BasicAck(ea.DeliveryTag, false);
 
                     activity?.SetStatus(ActivityStatusCode.Ok);
                     _logger.LogInformation(
-                        "Successfully processed and deleted message: {MessageId}",
+                        "Successfully processed message: {MessageId}",
                         messageData.MessageId
                     );
+                }
+                else
+                {
+                    _logger.LogWarning("Failed to deserialize message");
+                    _channel.BasicNack(ea.DeliveryTag, false, true); // Requeue
+                    activity?.SetStatus(ActivityStatusCode.Error, "Failed to deserialize message");
                 }
             }
             catch (Exception ex)
             {
+                _logger.LogError(ex, "Error processing message");
+                _channel.BasicNack(ea.DeliveryTag, false, true); // Requeue on error
+
                 activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                 activity?.SetTag("error.type", ex.GetType().Name);
                 activity?.SetTag("error.message", ex.Message);
-                _logger.LogError(ex, "Error processing message: {MessageId}", message.MessageId);
-
-                await _queueClient.DeleteMessageAsync(
-                    message.MessageId,
-                    message.PopReceipt,
-                    stoppingToken
-                );
             }
-        }
+        };
 
-        await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
+        _channel.BasicConsume(queue: _queueName, autoAck: false, consumer: consumer);
+
+        _logger.LogInformation($"Consumer registered for queue '{_queueName}'");
+
+        // Keep running until cancellation
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            await Task.Delay(1000, stoppingToken);
+        }
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Consumer service stopping...");
+        await base.StopAsync(cancellationToken);
     }
 }
 
@@ -207,6 +136,4 @@ public class MessageData
     public string MessageId { get; set; } = string.Empty;
     public string? Message { get; set; }
     public DateTime Timestamp { get; set; }
-    public string? TraceId { get; set; }
-    public string? SpanId { get; set; }
 }

@@ -1,9 +1,10 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
-using Azure.Storage.Queues;
 using Microsoft.AspNetCore.Mvc;
-using Producer.Services;
+using OpenTelemetry;
+using OpenTelemetry.Context.Propagation;
+using RabbitMQ.Client;
 
 namespace Producer.Controllers;
 
@@ -11,16 +12,18 @@ namespace Producer.Controllers;
 [Route("api/[controller]")]
 public class MessagesController : ControllerBase
 {
-    private readonly QueueClient? _queueClient;
-    private readonly InMemoryQueueService? _inMemoryQueue;
+    private readonly IModel _channel;
+    private readonly string _queueName;
     private static readonly ActivitySource ActivitySource = new("producer-api");
+    private static readonly TextMapPropagator Propagator = Propagators.DefaultTextMapPropagator;
 
-    public MessagesController(
-        QueueClient? queueClient = null,
-        InMemoryQueueService? inMemoryQueue = null)
+    public MessagesController(IModel channel, IConfiguration configuration)
     {
-        _queueClient = queueClient;
-        _inMemoryQueue = inMemoryQueue;
+        _channel = channel;
+        _queueName =
+            configuration["QueueName"]
+            ?? Environment.GetEnvironmentVariable("QUEUE_NAME")
+            ?? "otel-demo-queue";
     }
 
     [HttpPost]
@@ -28,52 +31,81 @@ public class MessagesController : ControllerBase
     {
         Console.WriteLine($"[DEBUG] PostMessage called at {DateTime.UtcNow:O}");
 
-        using var activity = ActivitySource.StartActivity("EnqueueMessage");
+        var messageId = Guid.NewGuid().ToString();
+        var messageData = new
+        {
+            MessageId = messageId,
+            Message = request.Message,
+            Timestamp = DateTime.UtcNow,
+        };
+
+        var jsonMessage = JsonSerializer.Serialize(messageData);
+        var body = Encoding.UTF8.GetBytes(jsonMessage);
+
+        // Create message properties
+        var properties = _channel.CreateBasicProperties();
+        properties.Persistent = true;
+        properties.MessageId = messageId;
+        properties.Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+
+        // Start messaging span following OpenTelemetry semantic conventions
+        // Span name: {destination} send
+        var activityName = $"{_queueName} send";
+        using var activity = ActivitySource.StartActivity(activityName, ActivityKind.Producer);
+
+        // Set messaging semantic convention attributes
+        activity?.SetTag("messaging.system", "rabbitmq");
+        activity?.SetTag("messaging.destination", _queueName);
+        activity?.SetTag("messaging.destination_kind", "queue");
+        activity?.SetTag("messaging.operation", "send");
+        activity?.SetTag("messaging.message_id", messageId);
         activity?.SetTag("message.text", request.Message);
         activity?.SetTag("message.length", request.Message?.Length ?? 0);
 
         try
         {
-            var messageId = Guid.NewGuid().ToString();
-            var messageData = new
+            // Propagate trace context through RabbitMQ headers using OpenTelemetry propagator
+            ActivityContext contextToInject = default;
+            if (activity != null)
             {
-                MessageId = messageId,
-                Message = request.Message,
-                Timestamp = DateTime.UtcNow,
-                TraceId = Activity.Current?.TraceId.ToString(),
-                SpanId = Activity.Current?.SpanId.ToString(),
-            };
-
-            var jsonMessage = JsonSerializer.Serialize(messageData);
-            var base64Message = Convert.ToBase64String(Encoding.UTF8.GetBytes(jsonMessage));
-
-            Console.WriteLine($"[DEBUG] About to enqueue message at {DateTime.UtcNow:O}");
-
-            // Use in-memory queue if available, otherwise use Azure Queue
-            if (_inMemoryQueue != null)
-            {
-                await _inMemoryQueue.SendMessageAsync(base64Message);
-                Console.WriteLine($"[DEBUG] Message enqueued to in-memory queue");
+                contextToInject = activity.Context;
             }
-            else if (_queueClient != null)
+            else if (Activity.Current != null)
             {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                await _queueClient.SendMessageAsync(base64Message, cancellationToken: cts.Token);
-                Console.WriteLine($"[DEBUG] Message enqueued to Azure Queue");
-            }
-            else
-            {
-                throw new InvalidOperationException("No queue service available");
+                contextToInject = Activity.Current.Context;
             }
 
-            activity?.SetTag("message.id", messageId);
+            // Inject the ActivityContext into the message headers
+            if (contextToInject != default)
+            {
+                properties.Headers ??= new Dictionary<string, object>();
+                Propagator.Inject(
+                    new PropagationContext(contextToInject, Baggage.Current),
+                    properties.Headers,
+                    (headers, key, value) => headers[key] = value);
+            }
+
+            Console.WriteLine($"[DEBUG] Publishing message to RabbitMQ queue '{_queueName}'");
+
+            // Publish message
+            _channel.BasicPublish(
+                exchange: "",
+                routingKey: _queueName,
+                basicProperties: properties,
+                body: body
+            );
+
             activity?.SetStatus(ActivityStatusCode.Ok);
+
+            Console.WriteLine($"[DEBUG] Message published successfully");
 
             return Ok(new { messageId, status = "enqueued" });
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[ERROR] Exception in PostMessage: {ex.GetType().Name} - {ex.Message}");
+            Console.WriteLine(
+                $"[ERROR] Exception in PostMessage: {ex.GetType().Name} - {ex.Message}"
+            );
             Console.WriteLine($"[ERROR] StackTrace: {ex.StackTrace}");
 
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
@@ -82,21 +114,6 @@ public class MessagesController : ControllerBase
             activity?.SetTag("error.stack", ex.StackTrace);
             return StatusCode(500, new { error = ex.Message });
         }
-    }
-
-    [HttpGet("receive")]
-    public async Task<IActionResult> ReceiveMessage()
-    {
-        if (_inMemoryQueue != null)
-        {
-            var message = await _inMemoryQueue.ReceiveMessageAsync();
-            if (message != null)
-            {
-                return Ok(new { messageText = message.MessageText, enqueuedAt = message.EnqueuedAt });
-            }
-            return NoContent(); // No messages available
-        }
-        return BadRequest(new { error = "In-memory queue not available" });
     }
 }
 

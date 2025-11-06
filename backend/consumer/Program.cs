@@ -1,66 +1,55 @@
 using Consumer;
-using Microsoft.Extensions.Http;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using RabbitMQ.Client;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-// Check if we should use in-memory queue (via HTTP polling)
-var useInMemoryQueue = Environment.GetEnvironmentVariable("USE_IN_MEMORY_QUEUE") != "false";
-var producerApiUrl =
-    Environment.GetEnvironmentVariable("PRODUCER_API_URL") ?? "http://producer-api:5000";
+// RabbitMQ Configuration
+var rabbitmqHost = Environment.GetEnvironmentVariable("RABBITMQ_HOST") ?? "localhost";
+var rabbitmqPort = int.Parse(Environment.GetEnvironmentVariable("RABBITMQ_PORT") ?? "5672");
+var rabbitmqUsername = Environment.GetEnvironmentVariable("RABBITMQ_USERNAME") ?? "guest";
+var rabbitmqPassword = Environment.GetEnvironmentVariable("RABBITMQ_PASSWORD") ?? "guest";
+var queueName = Environment.GetEnvironmentVariable("QUEUE_NAME") ?? "otel-demo-queue";
 
-if (useInMemoryQueue)
+// Register RabbitMQ Connection Factory
+builder.Services.AddSingleton<IConnectionFactory>(sp =>
 {
-    // Use HTTP client to poll producer API for messages
-    builder.Services.AddHttpClient(
-        "ProducerApi",
-        client =>
-        {
-            client.BaseAddress = new Uri(producerApiUrl);
-            client.Timeout = TimeSpan.FromSeconds(30);
-        }
-    );
-    // Don't register QueueClient - it's optional in the constructor
-    Console.WriteLine($"[INFO] Using in-memory queue via HTTP polling from {producerApiUrl}");
-}
-else
-{
-    // Configure Azure Storage Queue
-    var defaultConnectionString =
-        "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCzY4EwN/jaiwduXtrKWLoYIC3A7jqJA==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;";
-
-    var storageConnectionString =
-        builder.Configuration.GetConnectionString("AzureStorage")
-        ?? Environment.GetEnvironmentVariable("AZURE_STORAGE_CONNECTION_STRING")
-        ?? defaultConnectionString;
-
-    // Replace localhost/127.0.0.1 with azurite service name for Docker networking
-    if (
-        storageConnectionString.Contains("127.0.0.1")
-        || storageConnectionString.Contains("localhost")
-    )
+    return new ConnectionFactory
     {
-        var otlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
-        if (!string.IsNullOrEmpty(otlpEndpoint) && otlpEndpoint.Contains("otel-collector"))
-        {
-            storageConnectionString = storageConnectionString
-                .Replace("127.0.0.1", "azurite")
-                .Replace("localhost", "azurite");
-        }
-    }
+        HostName = rabbitmqHost,
+        Port = rabbitmqPort,
+        UserName = rabbitmqUsername,
+        Password = rabbitmqPassword,
+        DispatchConsumersAsync = true,
+    };
+});
 
-    var queueName =
-        builder.Configuration["QueueName"]
-        ?? Environment.GetEnvironmentVariable("QUEUE_NAME")
-        ?? "otel-demo-queue";
+// Register RabbitMQ Connection
+builder.Services.AddSingleton<IConnection>(sp =>
+{
+    var factory = sp.GetRequiredService<IConnectionFactory>();
+    return factory.CreateConnection();
+});
 
-    builder.Services.AddSingleton<Azure.Storage.Queues.QueueClient?>(
-        sp => new Azure.Storage.Queues.QueueClient(storageConnectionString, queueName)
+// Register RabbitMQ Channel
+builder.Services.AddSingleton<IModel>(sp =>
+{
+    var connection = sp.GetRequiredService<IConnection>();
+    var channel = connection.CreateModel();
+
+    // Declare queue (same as producer)
+    channel.QueueDeclare(
+        queue: queueName,
+        durable: false,
+        exclusive: false,
+        autoDelete: false,
+        arguments: null
     );
-    // Register null IHttpClientFactory since we're using Azure Queue
-    builder.Services.AddSingleton<IHttpClientFactory?>(sp => null);
-}
+
+    Console.WriteLine($"[INFO] RabbitMQ queue '{queueName}' declared");
+    return channel;
+});
 
 // Configure OpenTelemetry
 var serviceName = "consumer-service";
@@ -77,7 +66,6 @@ builder
             .AddSource(serviceName)
             .AddOtlpExporter(options =>
             {
-                // Use service name in Docker, localhost when running locally
                 var otlpEndpoint =
                     Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
                     ?? "http://localhost:4317";

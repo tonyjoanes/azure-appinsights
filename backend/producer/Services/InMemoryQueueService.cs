@@ -1,6 +1,4 @@
 using System.Collections.Concurrent;
-using System.Text;
-using System.Text.Json;
 
 namespace Producer.Services;
 
@@ -18,11 +16,9 @@ public class InMemoryQueueService
     public Task SendMessageAsync(string messageText, CancellationToken cancellationToken = default)
     {
         _logger?.LogInformation("Enqueueing message to in-memory queue");
-        _queue.Enqueue(new QueueMessage
-        {
-            MessageText = messageText,
-            EnqueuedAt = DateTime.UtcNow
-        });
+        _queue.Enqueue(
+            new QueueMessage { MessageText = messageText, EnqueuedAt = DateTime.UtcNow }
+        );
         return Task.CompletedTask;
     }
 
@@ -44,4 +40,3 @@ public class QueueMessage
     public string MessageText { get; set; } = string.Empty;
     public DateTime EnqueuedAt { get; set; }
 }
-
