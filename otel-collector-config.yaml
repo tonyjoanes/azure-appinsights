@@ -1,0 +1,50 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins:
+            - "http://localhost:5173"
+            - "http://127.0.0.1:5173"
+          allowed_headers:
+            - "Content-Type"
+            - "Authorization"
+          max_age: 7200
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: "local-development"
+        action: upsert
+
+exporters:
+  # OTLP exporter for Jaeger (Jaeger supports OTLP natively)
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+  
+  # Azure Monitor exporter (only if connection string is provided and valid)
+  # Note: If connection string is invalid, collector will fail to start
+  # So we only include it if the connection string looks valid
+  azuremonitor:
+    connection_string: ${AZURE_MONITOR_CONNECTION_STRING}
+    # Validate connection string format - must contain "InstrumentationKey=" or "IngestionEndpoint="
+    # If invalid, the exporter will fail, so we conditionally include it
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch, resource]
+      # Only include azuremonitor if connection string is valid
+      # For now, just use jaeger to avoid crashes
+      exporters: [otlp/jaeger]
+

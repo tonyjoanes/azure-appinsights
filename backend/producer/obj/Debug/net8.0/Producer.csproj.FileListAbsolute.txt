@@ -1,0 +1,7 @@
+C:\dev\azure-appinsights\backend\producer\obj\Debug\net8.0\Producer.csproj.AssemblyReference.cache
+C:\dev\azure-appinsights\backend\producer\obj\Debug\net8.0\rpswa.dswa.cache.json
+C:\dev\azure-appinsights\backend\producer\obj\Debug\net8.0\Producer.GeneratedMSBuildEditorConfig.editorconfig
+C:\dev\azure-appinsights\backend\producer\obj\Debug\net8.0\Producer.AssemblyInfoInputs.cache
+C:\dev\azure-appinsights\backend\producer\obj\Debug\net8.0\Producer.AssemblyInfo.cs
+C:\dev\azure-appinsights\backend\producer\obj\Debug\net8.0\Producer.csproj.CoreCompileInputs.cache
+C:\dev\azure-appinsights\backend\producer\obj\Debug\net8.0\Producer.MvcApplicationPartsAssemblyInfo.cache
