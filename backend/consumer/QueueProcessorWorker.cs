@@ -32,7 +32,7 @@ public class QueueProcessorWorker : BackgroundService
         consumer.Received += async (model, ea) =>
         {
             _logger.LogInformation("Message received from RabbitMQ queue");
-            
+
             var body = ea.Body.ToArray();
             var messageText = Encoding.UTF8.GetString(body);
             var properties = ea.BasicProperties;
@@ -58,11 +58,13 @@ public class QueueProcessorWorker : BackgroundService
                     return Array.Empty<string>();
                 }
             );
-            
+
             _logger.LogInformation(
                 "Extracted trace context - Valid: {IsValid}, TraceId: {TraceId}",
                 parentContext.ActivityContext.IsValid(),
-                parentContext.ActivityContext.IsValid() ? parentContext.ActivityContext.TraceId.ToString() : "N/A"
+                parentContext.ActivityContext.IsValid()
+                    ? parentContext.ActivityContext.TraceId.ToString()
+                    : "N/A"
             );
 
             // Create a span for message processing
@@ -71,7 +73,7 @@ public class QueueProcessorWorker : BackgroundService
             // - Span kind: Consumer (indicates this service is consuming messages)
             // - Parent context: Links this span to the producer span via trace context
             var activityName = $"{_queueName} receive";
-            
+
             // CRITICAL: Ensure we have a valid parent context or create a new root activity
             // If parent context is invalid, create a new trace (shouldn't happen if propagation works)
             Activity? activity;
@@ -86,7 +88,9 @@ public class QueueProcessorWorker : BackgroundService
             else
             {
                 // Fallback: create activity without parent (shouldn't normally happen)
-                _logger.LogWarning("No valid parent context found in message headers, creating root activity");
+                _logger.LogWarning(
+                    "No valid parent context found in message headers, creating root activity"
+                );
                 activity = ActivitySource.StartActivity(activityName, ActivityKind.Consumer);
             }
 
@@ -94,8 +98,8 @@ public class QueueProcessorWorker : BackgroundService
             if (activity == null)
             {
                 _logger.LogWarning(
-                    "Failed to create activity - ActivitySource '{ActivitySourceName}' may not be registered with OpenTelemetry. " +
-                    "Check that 'consumer-service' is added to AddSource() in Program.cs",
+                    "Failed to create activity - ActivitySource '{ActivitySourceName}' may not be registered with OpenTelemetry. "
+                        + "Check that 'consumer-service' is added to AddSource() in Program.cs",
                     ActivitySource.Name
                 );
             }

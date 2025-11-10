@@ -29,6 +29,16 @@ journeySpan.addEvent('journey.started', {
   timestamp: Date.now(),
   journeyId: journeyId,
 })
+
+Later in the success block (after the API response is received) we update the span:
+
+```javascript
+journeySpan.setAttribute('user.journey.step', 'api_completed')
+journeySpan.setAttribute('message.id', data.messageId)
+journeySpan.addEvent('journey.api_completed', {
+  timestamp: Date.now(),
+  messageId: data.messageId,
+})
 ```
 
 **Key Attributes:**
@@ -36,6 +46,8 @@ journeySpan.addEvent('journey.started', {
 - `user.journey.id`: Unique identifier for this specific journey
 - `user.journey.step`: Current step in the journey
 - `user.action`: The user action that triggered the journey
+
+If the API request fails we set `user.journey.status = "error"`, record the exception, and add a `journey.failed` event before ending the span.
 
 ### 2. Producer API - Journey Progress
 
@@ -60,6 +72,8 @@ activity?.AddEvent(new ActivityEvent("journey.completed"));
 // Add duration metric
 activity?.SetTag("journey.duration_ms", 
     (DateTime.UtcNow - messageData.Timestamp).TotalMilliseconds);
+
+On deserialization or processing errors we log the failure, requeue the message, and add the same `journey.failed` event used in the frontend with appropriate error metadata.
 ```
 
 ## Journey Flow

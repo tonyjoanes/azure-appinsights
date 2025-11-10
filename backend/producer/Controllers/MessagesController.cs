@@ -15,14 +15,18 @@ public class MessagesController : ControllerBase
     private readonly IModel _channel;
     private readonly string _queueName;
     private readonly ILogger<MessagesController> _logger;
-    
+
     // ActivitySource for creating custom spans - follows OpenTelemetry naming convention: service-name
     private static readonly ActivitySource ActivitySource = new("producer-api");
-    
+
     // TextMapPropagator for injecting trace context into RabbitMQ message headers
     private static readonly TextMapPropagator Propagator = Propagators.DefaultTextMapPropagator;
 
-    public MessagesController(IModel channel, IConfiguration configuration, ILogger<MessagesController> logger)
+    public MessagesController(
+        IModel channel,
+        IConfiguration configuration,
+        ILogger<MessagesController> logger
+    )
     {
         _channel = channel;
         _queueName =
@@ -70,7 +74,7 @@ public class MessagesController : ControllerBase
         activity?.SetTag("messaging.message_id", messageId);
         activity?.SetTag("message.text", request.Message);
         activity?.SetTag("message.length", request.Message?.Length ?? 0);
-        
+
         // USER JOURNEY EXAMPLE: Check if this is part of a user journey
         // The journey context is automatically propagated from the frontend via HTTP headers
         // We can add journey attributes to help AppInsights track the journey through the system
@@ -107,10 +111,14 @@ public class MessagesController : ControllerBase
                 Propagator.Inject(
                     new PropagationContext(contextToInject, Baggage.Current),
                     properties.Headers,
-                    (headers, key, value) => headers[key] = value);
+                    (headers, key, value) => headers[key] = value
+                );
             }
 
-            _logger.LogInformation("Publishing message to RabbitMQ queue '{QueueName}'", _queueName);
+            _logger.LogInformation(
+                "Publishing message to RabbitMQ queue '{QueueName}'",
+                _queueName
+            );
 
             // Publish message
             _channel.BasicPublish(
@@ -122,13 +130,21 @@ public class MessagesController : ControllerBase
 
             activity?.SetStatus(ActivityStatusCode.Ok);
 
-            _logger.LogInformation("Message published successfully. MessageId: {MessageId}", messageId);
+            _logger.LogInformation(
+                "Message published successfully. MessageId: {MessageId}",
+                messageId
+            );
 
             return Ok(new { messageId, status = "enqueued" });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Exception in PostMessage: {ExceptionType} - {Message}", ex.GetType().Name, ex.Message);
+            _logger.LogError(
+                ex,
+                "Exception in PostMessage: {ExceptionType} - {Message}",
+                ex.GetType().Name,
+                ex.Message
+            );
 
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("error.type", ex.GetType().Name);

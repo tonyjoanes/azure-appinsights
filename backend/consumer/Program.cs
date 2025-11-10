@@ -1,11 +1,11 @@
 using System;
 using System.Threading;
 using Consumer;
-using RabbitMQ.Client.Exceptions;
 using Microsoft.Extensions.Hosting;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Exceptions;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -64,7 +64,12 @@ builder.Services.AddSingleton<IConnection>(sp =>
         catch (BrokerUnreachableException ex) when (attempt < maxRetries)
         {
             attempt++;
-            logger.LogWarning(ex, "Failed to connect to RabbitMQ (attempt {Attempt}/{Max}). Retrying in 2 seconds...", attempt, maxRetries);
+            logger.LogWarning(
+                ex,
+                "Failed to connect to RabbitMQ (attempt {Attempt}/{Max}). Retrying in 2 seconds...",
+                attempt,
+                maxRetries
+            );
             Thread.Sleep(TimeSpan.FromSeconds(2));
         }
     }
