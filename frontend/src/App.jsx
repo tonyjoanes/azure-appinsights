@@ -10,19 +10,50 @@ function App() {
     setStatus('sending')
     setMessage('')
 
-    // Create a manual span for the button click
+    // USER JOURNEY EXAMPLE: Create a user journey span that represents the complete user interaction
+    // This is a business-level concept that helps track user behavior in AppInsights
+    // The journey spans the entire flow: Frontend → API → Queue → Consumer
     const tracer = trace.getTracer('react-frontend', '1.0.0')
-    const span = tracer.startSpan('SendMessageButtonClick', {
-      kind: 0, // SpanKind.INTERNAL - this wraps the entire operation
+    const journeyId = `journey-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    
+    // Create the user journey span - this will be the root span for this user interaction
+    const journeySpan = tracer.startSpan('UserJourney:SendMessage', {
+      kind: 0, // SpanKind.INTERNAL
+    })
+    
+    // Mark this as a user journey with custom attributes
+    // These attributes help AppInsights identify and group user journeys
+    journeySpan.setAttribute('user.journey.name', 'SendMessage')
+    journeySpan.setAttribute('user.journey.id', journeyId)
+    journeySpan.setAttribute('user.journey.step', 'started')
+    journeySpan.setAttribute('user.action', 'button_click')
+    journeySpan.setAttribute('user.session.id', sessionStorage.getItem('sessionId') || 'anonymous')
+    
+    // Add an event to mark the journey start
+    journeySpan.addEvent('journey.started', {
+      timestamp: Date.now(),
+      journeyId: journeyId,
     })
 
-    // Set the span as active context so child spans (like fetch) will use it as parent
-    return context.with(trace.setSpan(context.active(), span), async () => {
+    // Create a nested span for the button click operation
+    const span = tracer.startSpan('SendMessageButtonClick', {
+      kind: 0, // SpanKind.INTERNAL - this wraps the API call
+    })
+
+    // Set the journey span as active context so all child spans are part of the journey
+    return context.with(trace.setSpan(context.active(), journeySpan), async () => {
+      // Set the button click span as active for the immediate operation
+      return context.with(trace.setSpan(context.active(), span), async () => {
       try {
         // This fetch call will be automatically instrumented by OpenTelemetry
         // The trace context will be propagated to the Producer API
         // Since we set the span as active above, the fetch span will be a child of SendMessageButtonClick
-        const response = await fetch('http://localhost:5000/api/messages', {
+        // Prefer the environment-provided API URL (set by Aspire). Fallback to localhost for manual runs.
+        const apiUrl = import.meta.env.VITE_API_URL
+          || ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+            ? 'http://localhost:5000'
+            : 'http://producer-api:5000')
+        const response = await fetch(`${apiUrl}/api/messages`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -39,17 +70,45 @@ function App() {
         const data = await response.json()
         setStatus('success')
         setMessage(`Message sent! ID: ${data.messageId || 'N/A'}`)
+        
+        // Mark the button click span as successful
         span.setStatus({ code: 1 }) // OK
         span.setAttribute('message.id', data.messageId || 'N/A')
+        span.end()
+        
+        // Update journey with success status
+        // Note: The journey continues through the queue to the consumer
+        // The consumer will mark the final completion, but we end the frontend journey span here
+        // since we can't wait for async consumer processing
+        journeySpan.setAttribute('user.journey.step', 'api_completed')
+        journeySpan.setAttribute('message.id', data.messageId || 'N/A')
+        journeySpan.addEvent('journey.api_completed', {
+          timestamp: Date.now(),
+          messageId: data.messageId,
+        })
+        // End the journey span - the consumer will add its own attributes to the trace
+        journeySpan.end()
       } catch (error) {
         setStatus('error')
         setMessage(`Error: ${error.message}`)
         console.error('Failed to send message:', error)
+        
+        // Mark spans as failed
         span.setStatus({ code: 2, message: error.message }) // ERROR
         span.recordException(error)
-      } finally {
         span.end()
+        
+        // Mark journey as failed
+        journeySpan.setStatus({ code: 2, message: error.message })
+        journeySpan.setAttribute('user.journey.step', 'failed')
+        journeySpan.setAttribute('user.journey.error', error.message)
+        journeySpan.addEvent('journey.failed', {
+          timestamp: Date.now(),
+          error: error.message,
+        })
+        journeySpan.end() // End journey on error
       }
+    })
     })
   }
 
@@ -61,6 +120,10 @@ function App() {
           Click the button below to send a message through the system.
           <br />
           The trace will flow: Frontend → Producer API → Queue → Consumer
+          <br />
+          <strong>User Journey:</strong> A complete user journey is tracked from start to finish,
+          <br />
+          making it easy to analyze user behavior in Azure AppInsights.
         </p>
         
         <button 

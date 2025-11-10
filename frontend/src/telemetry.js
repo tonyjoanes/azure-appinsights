@@ -14,7 +14,18 @@ let provider = null;
 try {
   // Configure exporter
   // Use environment variable or default to localhost (for Docker, this will be set via Vite)
-  const otlpUrl = import.meta.env.VITE_OTLP_ENDPOINT || 'http://localhost:4318/v1/traces';
+  const rawEndpoint = import.meta.env.VITE_OTLP_ENDPOINT;
+  const otlpUrl = (() => {
+    if (!rawEndpoint) {
+      return 'http://localhost:4318/v1/traces';
+    }
+
+    const trimmed = rawEndpoint.replace(/\/$/, '');
+    return trimmed.endsWith('/v1/traces') ? trimmed : `${trimmed}/v1/traces`;
+  })();
+
+  console.log('Frontend OTLP exporter URL:', otlpUrl);
+
   const exporter = new OTLPTraceExporter({
     url: otlpUrl,
     headers: {},

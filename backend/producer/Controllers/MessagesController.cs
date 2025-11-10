@@ -14,22 +14,28 @@ public class MessagesController : ControllerBase
 {
     private readonly IModel _channel;
     private readonly string _queueName;
+    private readonly ILogger<MessagesController> _logger;
+    
+    // ActivitySource for creating custom spans - follows OpenTelemetry naming convention: service-name
     private static readonly ActivitySource ActivitySource = new("producer-api");
+    
+    // TextMapPropagator for injecting trace context into RabbitMQ message headers
     private static readonly TextMapPropagator Propagator = Propagators.DefaultTextMapPropagator;
 
-    public MessagesController(IModel channel, IConfiguration configuration)
+    public MessagesController(IModel channel, IConfiguration configuration, ILogger<MessagesController> logger)
     {
         _channel = channel;
         _queueName =
             configuration["QueueName"]
             ?? Environment.GetEnvironmentVariable("QUEUE_NAME")
             ?? "otel-demo-queue";
+        _logger = logger;
     }
 
     [HttpPost]
-    public async Task<IActionResult> PostMessage([FromBody] MessageRequest request)
+    public IActionResult PostMessage([FromBody] MessageRequest request)
     {
-        Console.WriteLine($"[DEBUG] PostMessage called at {DateTime.UtcNow:O}");
+        _logger.LogInformation("PostMessage called at {Timestamp}", DateTime.UtcNow);
 
         var messageId = Guid.NewGuid().ToString();
         var messageData = new
@@ -48,12 +54,15 @@ public class MessagesController : ControllerBase
         properties.MessageId = messageId;
         properties.Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
 
-        // Start messaging span following OpenTelemetry semantic conventions
-        // Span name: {destination} send
+        // Create a span for the message publishing operation
+        // Following OpenTelemetry semantic conventions for messaging:
+        // - Span name: {destination} send
+        // - Span kind: Producer (indicates this service is producing messages)
         var activityName = $"{_queueName} send";
         using var activity = ActivitySource.StartActivity(activityName, ActivityKind.Producer);
 
-        // Set messaging semantic convention attributes
+        // Set OpenTelemetry semantic convention attributes for messaging
+        // These attributes help Azure AppInsights and Jaeger understand the message flow
         activity?.SetTag("messaging.system", "rabbitmq");
         activity?.SetTag("messaging.destination", _queueName);
         activity?.SetTag("messaging.destination_kind", "queue");
@@ -61,10 +70,24 @@ public class MessagesController : ControllerBase
         activity?.SetTag("messaging.message_id", messageId);
         activity?.SetTag("message.text", request.Message);
         activity?.SetTag("message.length", request.Message?.Length ?? 0);
+        
+        // USER JOURNEY EXAMPLE: Check if this is part of a user journey
+        // The journey context is automatically propagated from the frontend via HTTP headers
+        // We can add journey attributes to help AppInsights track the journey through the system
+        if (Activity.Current != null)
+        {
+            // Add attributes to link this operation to the user journey
+            // These will appear in AppInsights and help correlate the journey across services
+            activity?.SetTag("user.journey.step", "message_enqueued");
+            activity?.AddEvent(new ActivityEvent("journey.message_enqueued"));
+        }
 
         try
         {
-            // Propagate trace context through RabbitMQ headers using OpenTelemetry propagator
+            // CRITICAL: Propagate trace context through RabbitMQ message headers
+            // This ensures the trace continues in the consumer service
+            // The trace context (trace ID, span ID) is injected into message headers
+            // so the consumer can create a child span linked to this producer span
             ActivityContext contextToInject = default;
             if (activity != null)
             {
@@ -72,10 +95,12 @@ public class MessagesController : ControllerBase
             }
             else if (Activity.Current != null)
             {
+                // Fallback to current activity if our activity wasn't created
                 contextToInject = Activity.Current.Context;
             }
 
-            // Inject the ActivityContext into the message headers
+            // Inject trace context into RabbitMQ message headers
+            // The propagator handles encoding trace context into W3C Trace Context format
             if (contextToInject != default)
             {
                 properties.Headers ??= new Dictionary<string, object>();
@@ -85,7 +110,7 @@ public class MessagesController : ControllerBase
                     (headers, key, value) => headers[key] = value);
             }
 
-            Console.WriteLine($"[DEBUG] Publishing message to RabbitMQ queue '{_queueName}'");
+            _logger.LogInformation("Publishing message to RabbitMQ queue '{QueueName}'", _queueName);
 
             // Publish message
             _channel.BasicPublish(
@@ -97,16 +122,13 @@ public class MessagesController : ControllerBase
 
             activity?.SetStatus(ActivityStatusCode.Ok);
 
-            Console.WriteLine($"[DEBUG] Message published successfully");
+            _logger.LogInformation("Message published successfully. MessageId: {MessageId}", messageId);
 
             return Ok(new { messageId, status = "enqueued" });
         }
         catch (Exception ex)
         {
-            Console.WriteLine(
-                $"[ERROR] Exception in PostMessage: {ex.GetType().Name} - {ex.Message}"
-            );
-            Console.WriteLine($"[ERROR] StackTrace: {ex.StackTrace}");
+            _logger.LogError(ex, "Exception in PostMessage: {ExceptionType} - {Message}", ex.GetType().Name, ex.Message);
 
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("error.type", ex.GetType().Name);

@@ -2,78 +2,59 @@
 
 ## 🚀 Quick Setup (3 Steps!)
 
-### 1. Get Azure Application Insights Connection String
+### 1. Grab your Azure Application Insights connection string (optional)
 
 1. Go to https://portal.azure.com
-2. Find your **Application Insights** resource (or create one)
-3. Go to **Overview** → Click **Connection String**
-4. Copy the full connection string (looks like: `InstrumentationKey=xxx;IngestionEndpoint=https://xxx...`)
+2. Open your **Application Insights** resource (or create one)
+3. Copy the full **Connection string** from the Overview blade (`InstrumentationKey=...;IngestionEndpoint=...`)
 
-### 2. Create `.env` File
-
-Create a `.env` file in the project root:
-
-```env
-AZURE_MONITOR_CONNECTION_STRING=YOUR_CONNECTION_STRING_HERE
-AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCzY4EwN/jaiwduXtrKWLoYIC3A7jqJA==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;
-QUEUE_NAME=otel-demo-queue
-```
-
-**Replace `YOUR_CONNECTION_STRING_HERE` with your actual connection string from step 1.**
-
-### 3. Start Everything with Docker Compose! 🎉
+When you launch the demo you can provide it via an environment variable:
 
 ```bash
-docker compose up --build
+set AZURE_MONITOR_CONNECTION_STRING=InstrumentationKey=...
+# macOS/Linux: export AZURE_MONITOR_CONNECTION_STRING=...
 ```
 
-That's it! This single command starts:
-- ✅ Azurite (Azure Storage emulator)
-- ✅ Jaeger UI (trace visualization)
-- ✅ OpenTelemetry Collector
-- ✅ Producer API
-- ✅ Consumer Service
-- ✅ Frontend
+If you skip this step the collector will still export to Jaeger locally; Azure export is simply disabled.
 
-### 4. Test It!
+### 2. Start the Aspire app host 🎉
 
-1. Wait for all services to start (may take 1-2 minutes on first run)
-2. Open http://localhost:5173 in your browser
-3. Click "Send Message"
-4. View traces:
+```bash
+dotnet run --project AzureAppInsights.AppHost
+```
+
+This one command launches:
+- ✅ RabbitMQ (queue + management UI)
+- ✅ OpenTelemetry Collector (OTLP gRPC + HTTP)
+- ✅ Jaeger all-in-one (local trace viewer)
+- ✅ Producer API (ASP.NET Core)
+- ✅ Consumer worker (.NET)
+- ✅ React frontend (Vite dev server)
+
+An Aspire dashboard appears at http://localhost:15000 where you can watch health and logs in real time.
+
+### 3. Test the end-to-end flow
+
+1. Open http://localhost:5173 in your browser
+2. Click **Send Message**
+3. View traces:
    - **Local:** http://localhost:16686 (Jaeger UI)
-   - **Azure:** Go to Azure Portal → Your App Insights → Transaction search
+   - **Azure:** Portal → Application Insights → Transaction Search (if you supplied a connection string)
 
 ### Stop Everything
 
-```bash
-docker compose down
-```
+Press `Ctrl+C` in the terminal running the app host. Aspire stops every process and container it started.
 
-## 📊 Viewing Traces
+## 📊 Viewing Traces & Logs
 
-### Local (Jaeger)
-- URL: http://localhost:16686
-- Select any service and click "Find Traces"
-
-### Azure Application Insights
-- Go to Azure Portal → Your Application Insights resource
-- Navigate to **Transaction search** or **Application map**
-- Traces appear within 1-2 minutes
+- **Aspire dashboard:** http://localhost:15000 (health, logs, and environment variables)
+- **Jaeger UI:** http://localhost:16686 (select `react-frontend`, `producer-api`, or `consumer-service`)
+- **RabbitMQ UI:** http://localhost:15672 (guest/guest)
 
 ## ⚠️ Troubleshooting
 
-**Docker not starting?**
-- Make sure Docker Desktop is running
-- Check ports aren't in use: `docker compose ps`
-
-**Can't connect to Azure?**
-- Verify your connection string is correct in `.env`
-- Check format includes both `InstrumentationKey` and `IngestionEndpoint`
-- Wait 1-2 minutes for traces to appear
-
-**Services won't start?**
-- Make sure you're in the correct directories
-- Run `dotnet restore` if packages are missing
-- Check `docker compose logs` for errors
+- Make sure Docker Desktop is running (Aspire uses it for RabbitMQ, Jaeger, and the OTEL collector)
+- If ports clash, stop whatever else is using 5173/16686/15672/4317/4318
+- Use the Aspire dashboard to drill into logs for each resource
+- Traces can take a minute to appear in Azure—refresh the Transaction Search blade if needed
 

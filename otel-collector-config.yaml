@@ -31,19 +31,20 @@ exporters:
     tls:
       insecure: true
   
-  # Azure Monitor exporter
+  # Azure Monitor exporter (optional - comment out if not using Azure)
   # Connection string format: InstrumentationKey=<guid>;IngestionEndpoint=https://<region>.in.applicationinsights.azure.com/
   # Get the full connection string from Azure Portal: Application Insights > Overview > Connection String
+  # Note: If connection string is empty, the exporter may fail. Comment out the azuremonitor exporter
+  # in the pipelines section below if you're not using Azure Application Insights.
   azuremonitor:
     connection_string: ${AZURE_MONITOR_CONNECTION_STRING}
-    # If connection string is empty or invalid, the collector will fail to start
-    # Make sure your .env file has the FULL connection string, not just the Instrumentation Key
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch, resource]
-      # Export to both Jaeger (local) and Azure Monitor
+      # Export to Jaeger (always) and Azure Monitor (if configured)
+      # To disable Azure export, remove 'azuremonitor' from the exporters list below
       exporters: [otlp/jaeger, azuremonitor]
 
