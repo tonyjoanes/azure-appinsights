@@ -3,6 +3,7 @@ bin/
 obj/
 **/bin/
 **/obj/
+.gradle/
 *.user
 *.suo
 *.userprefs
