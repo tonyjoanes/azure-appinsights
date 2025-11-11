@@ -80,3 +80,10 @@ C:\dev\azure-appinsights\backend\producer\bin\Debug\net8.0\OpenTelemetry.Persist
 C:\dev\azure-appinsights\backend\producer\bin\Debug\net8.0\OpenTelemetry.PersistentStorage.FileSystem.dll
 C:\dev\azure-appinsights\backend\producer\bin\Debug\net8.0\System.ClientModel.dll
 C:\dev\azure-appinsights\backend\producer\bin\Debug\net8.0\System.Memory.Data.dll
+C:\dev\azure-appinsights\backend\producer\bin\Debug\net8.0\LanguageExt.Core.dll
+C:\dev\azure-appinsights\backend\producer\bin\Debug\net8.0\Microsoft.AspNetCore.OpenApi.dll
+C:\dev\azure-appinsights\backend\producer\bin\Debug\net8.0\Microsoft.OpenApi.dll
+C:\dev\azure-appinsights\backend\producer\bin\Debug\net8.0\Swashbuckle.AspNetCore.Swagger.dll
+C:\dev\azure-appinsights\backend\producer\bin\Debug\net8.0\Swashbuckle.AspNetCore.SwaggerGen.dll
+C:\dev\azure-appinsights\backend\producer\bin\Debug\net8.0\Swashbuckle.AspNetCore.SwaggerUI.dll
+C:\dev\azure-appinsights\backend\producer\obj\Debug\net8.0\Producer.MvcApplicationPartsAssemblyInfo.cs
