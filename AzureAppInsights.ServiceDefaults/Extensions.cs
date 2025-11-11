@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -22,6 +23,8 @@ public static class Extensions
     public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder)
         where TBuilder : IHostApplicationBuilder
     {
+        ConfigureStructuredLogging(builder);
+
         builder.ConfigureOpenTelemetry();
 
         builder.AddDefaultHealthChecks();
@@ -140,5 +143,18 @@ public static class Extensions
         }
 
         return app;
+    }
+
+    private static void ConfigureStructuredLogging(IHostApplicationBuilder builder)
+    {
+        builder.Logging.AddJsonConsole(options =>
+        {
+            options.IncludeScopes = true;
+            options.UseUtcTimestamp = true;
+            options.JsonWriterOptions = new JsonWriterOptions
+            {
+                Indented = false
+            };
+        });
     }
 }

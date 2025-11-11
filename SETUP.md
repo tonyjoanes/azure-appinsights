@@ -49,7 +49,7 @@ The Aspire dashboard launches at https://localhost:17022 (Follow the login link 
 
 ## Viewing Logs & Telemetry
 
-- **Aspire dashboard**: https://localhost:17022 (requires the one-time login link from the console)
+- **Aspire dashboard**: https://localhost:17022 (requires the one-time login link from the console). The **Structured logs** tab now shows the JSON console output (scopes + UTC timestamps) for each resource.
 - **Jaeger UI**: http://localhost:16686 (local trace explorer)
 - **RabbitMQ UI**: http://localhost:15672 (guest/guest)
 - **Application Insights**: use Transaction Search or KQL (traces/dependencies) for the cloud view

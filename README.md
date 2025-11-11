@@ -66,6 +66,10 @@ As a result, every span—and every log—can be stitched together in Jaeger or 
 
 For a concrete walkthrough (including the actual code snippets), see the "Implementation" section in [`USER_JOURNEY_EXAMPLE.md`](USER_JOURNEY_EXAMPLE.md).
 
+### 4. **Structured Logging**
+- The built-in JSON console logger is enabled with scopes and UTC timestamps so Aspire’s **Structured logs** tab (and any downstream tooling) can parse events immediately
+- Log entries automatically carry trace context (TraceId/SpanId) so you can pivot from logs to traces without extra work
+
 ---
 
 ## 4. Running the Demo

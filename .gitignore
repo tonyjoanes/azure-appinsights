@@ -1,8 +1,8 @@
 .env
 bin/
 obj/
-*/bin/
-*/obj/
+**/bin/
+**/obj/
 *.user
 *.suo
 *.userprefs
